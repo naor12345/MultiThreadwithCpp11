@@ -7,10 +7,10 @@ A thread pool developed with cpp11
 
 
 ## 成员变量
-- ```vector<thread> _pool```： 线程池
+- ```vector<thread> _pool```：线程池
 - ```queue<Task> _tasks```：任务队列
 - ```mutex _lock```：互斥量，pop、push锁
-- ```mutex _drain_lock;``：互斥量，用于任务清空
+- ```mutex _drain_lock```：互斥量，用于任务清空
 - ```condition_variable _task_cv```：信号量，队列空时触发
 - ```condition_variable _drain_cv```：信号量，任务清空时触发
 - ```atomic<bool> _run{ true }```：原子布尔，判定是否运行
