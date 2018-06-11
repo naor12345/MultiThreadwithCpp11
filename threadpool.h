@@ -1,3 +1,4 @@
+#pragma once
 #include <list>
 #include <thread>
 #include <vector>
@@ -10,7 +11,8 @@
 
 namespace std
 {
-#define  THREADPOOL_MAX_NUM 12
+#define  THREADPOOL_MAX_NUM 6
+#define  QUEUE_MAX_NUM 6
 	class threadpool
 	{
 		using Task = function < void() >;
@@ -18,13 +20,15 @@ namespace std
 		queue<Task> _tasks;
 		mutex _lock;
 		mutex _drain_lock;
+		mutex _queue_full_lock;
 		condition_variable _task_cv;
 		condition_variable _drain_cv;
+		condition_variable _queue_cv;
 		atomic<bool> _run{ true };
 		atomic<int>  _idlThrNum{ 0 };
 		atomic<int>  _totalThrNum{ 0 };
 	public:
-		inline threadpool(unsigned short size = 4) { addThread(size); }
+		inline threadpool(unsigned short size = 6) { addThread(size); }
 		inline ~threadpool()
 		{
 			_run = false;
@@ -34,7 +38,7 @@ namespace std
 					thread.join();
 			}
 		}
-	public:		
+	public:
 		//bind:-commit(std::bind(&Dog::sayHello, &dog));
 		//mem_fn:-commit(std::mem_fn(&Dog::sayHello), this)
 		template<class F, class... Args>
@@ -42,6 +46,14 @@ namespace std
 		{
 			if (!_run)
 				throw runtime_error("commit on ThreadPool is stopped.");
+			// check size of queue
+			{
+				unique_lock<mutex> lock{ _lock };
+				_queue_cv.wait(_lock, [this] {
+					return _tasks.size() < QUEUE_MAX_NUM;
+				});
+			}
+
 			using RetType = decltype(f(args...));
 			auto task = make_shared<packaged_task<RetType()>>(
 				bind(forward<F>(f), forward<Args>(args)...)
@@ -49,7 +61,7 @@ namespace std
 			future<RetType> future = task->get_future();
 			{
 				lock_guard<mutex> lock{ _lock };
-				_tasks.emplace([task](){
+				_tasks.emplace([task]() {
 					(*task)();
 				});
 			}
@@ -62,13 +74,13 @@ namespace std
 		}
 
 		void drainTask()
-		{
+		{    
 			unique_lock<mutex> lock{ _drain_lock };
-			_drain_cv.wait(lock, [this]{
+			_drain_cv.wait(lock, [this] {
 				return _run && _tasks.empty() && (_idlThrNum == _totalThrNum);
 			});
-		}		
-		int idlCount() { return _idlThrNum; }		
+		}
+		int idlCount() { return _idlThrNum; }
 		int thrCount() { return (int)_pool.size(); }
 #ifndef THREADPOOL_AUTO_GROW
 	private:
@@ -77,19 +89,20 @@ namespace std
 		{
 			for (; _pool.size() < THREADPOOL_MAX_NUM && size > 0; --size)
 			{
-				_pool.emplace_back([this]{
+				_pool.emplace_back([this] {
 					while (_run)
 					{
 						Task task;
 						{
 							unique_lock<mutex> lock{ _lock };
-							_task_cv.wait(lock, [this]{
+							_task_cv.wait(lock, [this] {
 								return !_run || !_tasks.empty();
 							});
 							if (!_run && _tasks.empty())
 								return;
 							task = move(_tasks.front());
 							_tasks.pop();
+							_queue_cv.notify_one();
 						}
 						_idlThrNum--;
 						task();
